@@ -1,0 +1,20 @@
+Usage: STAR  [options]... --genomeDir /path/to/genome/index/   --readFilesIn R1.fq R2.fq
+Spliced Transcripts Alignment to a Reference (c) Alexander Dobin, 2009-2022
+
+STAR version=2.7.11b
+STAR compilation time,server,dir= :/Users/distiller/project/STARcompile/source
+For more details see:
+<https://github.com/alexdobin/STAR>
+<https://github.com/alexdobin/STAR/blob/master/doc/STARmanual.pdf>
+
+To list all parameters, run STAR --help
+Usage: STAR  [options]... --genomeDir /path/to/genome/index/   --readFilesIn R1.fq R2.fq
+Spliced Transcripts Alignment to a Reference (c) Alexander Dobin, 2009-2022
+
+STAR version=2.7.11b
+STAR compilation time,server,dir= :/Users/distiller/project/STARcompile/source
+For more details see:
+<https://github.com/alexdobin/STAR>
+<https://github.com/alexdobin/STAR/blob/master/doc/STARmanual.pdf>
+
+To list all parameters, run STAR --help

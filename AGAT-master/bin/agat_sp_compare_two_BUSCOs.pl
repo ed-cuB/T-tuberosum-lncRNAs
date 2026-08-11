@@ -1,0 +1,401 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+use Carp;
+use Clone 'clone';
+use Pod::Usage;
+use Getopt::Long;
+use IO::File ;
+use List::Util 'first';
+use AGAT::AGAT;
+
+start_script();
+my $header = get_agat_header();
+# -------------------------------- LOAD OPTIONS --------------------------------
+my $config;
+my $folderIn1=undef;
+my $folderIn2=undef;
+my $outfolder=undef;
+my $opt_help = 0;
+
+my @copyARGV=@ARGV;
+my ($shared_argv, $script_argv) = split_argv_shared_vs_script(\@ARGV);
+my $script_parser = Getopt::Long::Parser->new;
+$script_parser->configure('bundling','no_auto_abbrev');
+if ( !$script_parser->getoptionsfromarray(
+    $script_argv,
+    'f1=s'        => \$folderIn1,
+    'f2=s'        => \$folderIn2,
+    'o|out|output=s'  => \$outfolder,
+    'h|help!'     => \$opt_help ) )
+{
+    pod2usage( { -message => 'Failed to parse command line',
+                 -verbose => 1,
+                 -exitval => 1 } );
+}
+
+if ($opt_help) {
+    pod2usage( { -verbose => 99,
+                 -exitval => 0,
+                 -message => "$header\n" } );
+}
+
+if ( !defined($folderIn1) or  !defined($folderIn2) ){
+   pod2usage( {  -message => "$header\nAt least 2 parameters are mandatory: --f1 and --f2",
+                 -verbose => 0,
+                 -exitval => 2 } );
+}
+
+my ($shared_opts) = parse_shared_options($shared_argv);
+initialize_agat({ config_file_in => $shared_opts->{config}, input => $folderIn1, shared_opts => $shared_opts });
+# -----------------------------------------------------------------------------------------------
+
+# Manage input folder1
+my $fh1;
+$folderIn1 = remove_slash_path_folder($folderIn1);
+opendir(DIR, "$folderIn1")  or die "Unable to read Directory : $!";
+my @files_table1 = grep(/^full_table/,readdir(DIR));
+if (! @files_table1){print "full_table[_abinitio].tsv file missing in $folderIn1\n"; exit;}
+my $path1=$folderIn1."/".$files_table1[0];
+open($fh1, '<', $path1) or die "Could not open file '$path1' $!";
+
+#Manage input folder2
+my $fh2;
+$folderIn2 = remove_slash_path_folder($folderIn2);
+opendir(DIR, "$folderIn2") or die "Unable to read Directory $folderIn2 : $!";;
+my @files_table2 = grep(/^full_table/,readdir(DIR));
+if (! @files_table2){print "full_table[_abinitio].tsv file missing in $folderIn2\n"; exit;}
+my $path2=$folderIn2."/".$files_table2[0];
+open($fh2, '<', $path2) or die "Could not open file '$path2' $!";
+
+
+#Manage output folder
+if ($outfolder) {
+  $outfolder = remove_slash_path_folder($outfolder);
+  if(! -d $outfolder ){
+    mkdir $outfolder;
+  }
+  else{
+    print "$outfolder output folder already exists !\n"; exit;
+  }
+}
+
+# Manage Output gff files
+my $gffout_complete_path;
+my $gffout_fragmented_path;
+my $gffout_duplicated_path;
+if ($outfolder) {
+  $gffout_complete_path = $outfolder."/"."f1_complete.gff";
+	$gffout_fragmented_path = $outfolder."/"."f1_fragmented.gff";
+	$gffout_duplicated_path = $outfolder."/"."f1_duplicated.gff";
+}
+my $gffout_complete = prepare_gffout( $gffout_complete_path);
+my $gffout_fragmented = prepare_gffout( $gffout_fragmented_path);
+my $gffout_duplicated = prepare_gffout( $gffout_duplicated_path);
+
+my %gff_out;
+$gff_out{'complete'}=$gffout_complete;
+$gff_out{'fragmented'}=$gffout_fragmented;
+$gff_out{'duplicated'}=$gffout_duplicated;
+
+#############################################################
+#                         MAIN
+#############################################################
+
+#Read busco1 file
+my %busco1;
+while( my $line = <$fh1>)  {
+
+  if( $line =~ m/^\w+\s{1}Complete/){
+    my @list = split(/\s/,$line);
+    $busco1{'complete'}{$list[0]}=$line;
+  }
+  if( $line =~ m/^\w+\s{1}Missing/){
+    my @list = split(/\s/,$line);
+    $busco1{'missing'}{$list[0]}=$line;
+  }
+  if( $line =~ m/^\w+\s{1}Fragmented/){
+    my @list = split(/\s/,$line);
+    $busco1{'fragmented'}{$list[0]}=$line;
+  }
+  if( $line =~ m/^\w+\s{1}Duplicated/){
+    my @list = split(/\s/,$line);
+    $busco1{'duplicated'}{$list[0]}=$line;
+  }
+}
+
+#Read busco2 file
+my %busco2;
+while( my $line = <$fh2>)  {
+
+  if( $line =~ m/^\w+\s{1}Complete/){
+    my @list = split(/\s/,$line);
+    $busco2{'complete'}{$list[0]}=$line;
+  }
+  if( $line =~ m/^\w+\s{1}Missing/){
+    my @list = split(/\s/,$line);
+    $busco2{'missing'}{$list[0]}=$line;
+  }
+  if( $line =~ m/^\w+\s{1}Fragmented/){
+    my @list = split(/\s/,$line);
+    $busco2{'fragmented'}{$list[0]}=$line;
+  }
+  if( $line =~ m/^\w+\s{1}Duplicated/){
+    my @list = split(/\s/,$line);
+    $busco2{'duplicated'}{$list[0]}=$line;
+  }
+}
+
+my %hashCases;
+my %streamOutputs;
+#compare busco1 and busco2
+foreach my $type1 (keys %busco1){
+  foreach my $id1 (keys %{$busco1{$type1}} ){
+
+    foreach my $type2 (keys %busco2){
+      if($type1 ne $type2){
+        if(exists_keys (\%busco2,($type2,$id1)  ) ){
+
+          my $name=$type1."2".$type2;
+          $hashCases{$id1}=$name;
+          # create streamOutput
+          if($outfolder){
+            if (! exists_keys (\%streamOutputs,($name)) ){
+              my $ostream = IO::File->new();
+              $ostream->open( $outfolder."/$name.txt", 'w' ) or croak( sprintf( "Can not open '%s' for writing %s", $outfolder."/$name.txt", $! ) );
+              $streamOutputs{$name}=$ostream;
+            }
+            my $streamOut=$streamOutputs{$name};
+            print $streamOut  $busco1{$type1}{$id1};
+          }
+          else{
+            print "$id1 was $type1 and it is now $type2\n";
+          }
+        }
+      }
+    }
+    if(! exists_keys(\%hashCases,($id1) ) ){
+      $hashCases{$id1}=$type1."2".$type1;
+    }
+  }
+}
+
+#extract gff from folder1
+my $full_omniscient={};
+my $loop = 0;
+my $augustus_gff_folder=$folderIn1."/augustus_output/predicted_genes";
+
+if (-d $augustus_gff_folder){
+  opendir(DH, $augustus_gff_folder);
+  my @files = readdir(DH);
+
+  my %track_found;
+  my @list_cases=("complete","fragmented","duplicated");
+  foreach my $type (@list_cases){
+    dual_print2 "extract gff for $type cases\n";
+    foreach my $id (sort keys %{$busco1{$type}}){
+      my @list = split(/\s/,$busco1{$type}{$id});
+      my $seqId = $list[2];
+      my $start = $list[3];
+      my $end = $list[4];
+
+      my @matches = grep { /\Q$id/ } @files;
+      if( @matches){
+        foreach my $match (sort @matches){
+          my $path = $augustus_gff_folder."/".$match;
+          if (-f $path ){
+            my  $found=undef;
+            dual_print2 $path."\n";
+
+            my ($hash_omniscient) = slurp_gff3_file_JD({ input => $path,
+                                                                             config => $config
+                                                                        });
+            if (!keys %{$hash_omniscient}){
+              dual_print1 "No gene found for $path\n";exit;
+            }
+
+            my @listIDl1ToRemove;
+            if( exists_keys ($hash_omniscient,('level1','gene'))){
+              foreach my $id_l1 (keys %{$hash_omniscient->{'level1'}{'gene'}}){
+                my $feature = $hash_omniscient->{'level1'}{'gene'}{$id_l1};
+                if ($feature->seq_id() eq $seqId and  $feature->start == $start and $feature->end == $end){
+                  $found=1;
+                  $track_found{$type}{$id}++;
+
+                  #Add the OG name to the feature, to be displayed in WA
+                  foreach my $tag_l2 (keys %{$hash_omniscient->{'level2'}}){
+                    if( exists_keys($hash_omniscient,('level2', $tag_l2, $id_l1))){
+                      foreach my $feature_l2 ( @{$hash_omniscient->{'level2'}{$tag_l2}{$id_l1}} ){
+                        my $value=$id."-".$hashCases{$id};
+                        $feature_l2->add_tag_value('description', $value);
+                      }
+                    }
+                  }
+                }
+                else{push(@listIDl1ToRemove,$id_l1);}
+              }
+
+              if ($found){
+                if(@listIDl1ToRemove){
+                  dual_print2 "lets remove those supernumary annotation: @listIDl1ToRemove \n";
+                  remove_omniscient_elements_from_level1_id_list($hash_omniscient, \@listIDl1ToRemove);
+                }
+
+                if($loop == 0){
+                  $full_omniscient = clone($hash_omniscient);
+                  $loop++;
+                }
+                elsif($loop == 1){
+                  ( $full_omniscient ) = merge_omniscients($full_omniscient, $hash_omniscient);
+                  $loop++;
+                }
+                else{
+                  ( $full_omniscient ) = merge_omniscients($full_omniscient, $hash_omniscient);
+                }
+              }
+              else{
+                dual_print2 "No annotation as described in the tsv file found in the gff file $path\n";
+              }
+            }
+            else{
+              dual_print2 "No annotation in the file $path, lets look the next one.\n";
+            }
+          }
+          else{
+            dual_print2 "A) file $id not found among augustus gff output\n";
+          }
+        }
+      }
+      else{
+        dual_print2 "file $id not found among augustus gff output\n";
+      }
+      if(! exists_keys(\%track_found,($type,$id))){
+        warn "WARNING After reading all the files related to id $id we didn't found any annotation matching its described in the tsv file.\n";
+      }
+    }
+    my $out = $gff_out{$type};
+    print_omniscient( {omniscient => $full_omniscient, output => $out} );
+    %$full_omniscient = (); # empty hash
+    my $nb = keys %{$track_found{$type}};
+    $loop = 0;
+    dual_print1 "We found $nb annotations from $type busco\n";
+  }
+
+}
+else{ dual_print1 "$augustus_gff_folder folder doesn't exits\n"; exit;}
+
+
+# --- final messages ---
+end_script();
+
+# -----------------------------------------------------------------------------------------------
+#######################################################################################################################
+        ####################
+         #     methods    #
+          ################
+           ##############
+            ############
+             ##########
+              ########
+               ######
+                ####
+                 ##
+
+sub remove_slash_path_folder{
+  my ($folder_path)=@_;
+  if ( $folder_path =~ /\/$/){
+    return  $folder_path = substr $folder_path, 0, -1;
+  }
+  else{
+    return $folder_path;
+  }
+}
+
+__END__
+
+
+=head1 NAME
+
+agat_sp_compare_two_BUSCOs.pl
+
+=head1 DESCRIPTION
+
+The tool compares the results from two BUSCO runs (genome and proteome mode) in order to pinpoint the differences.
+It compares the BUSCOs classification (complete,fragmented, duplicated) of the 1st run (genome mode)
+against the classification found in the second run. It will report the results in txt files, and
+extracts the complete,fragmented and duplicated annotated BUSCOs from the 1st run in gff files.
+We add in the gff an attribute specifying the cases e.g. description=EOG090W00UK-complete2duplicated.
+Where EOG090W00UK is the BUSCO name/label/group investigated, and complete2duplicated the case we found
+(was complete in run1 and duplicated in run2).
+By loading these gff tracks in a web browser and helped by other tracks (e.g the genome annotation/prediction)
+can help to understand why the BUSCO have been classified differently from run1 to run2.
+In other term it allows to catch potential problems in an annotation.
+agat_sp_compare_two_BUSCOs.pl has been tested with results from BUSCO version 3 and 4.
+/!\ The tool expects a BUSCO run in genome mode as input folder 1 and a BUSCO run in proteins mode
+as input folder 2. You can also decide to provide twice (--f1 --f2) the same BUSCO run in genome mode,
+the tool will only extract the annotation of the complete,fragmented and duplicated annotated BUSCOs from the 1st run in gff.
+
+=head1 SYNOPSIS
+
+    agat_sp_compare_two_BUSCOs.pl --f1 <input busco folder1> --f2 <input busco folder2> [-o <output folder>]
+    agat_sp_compare_two_BUSCOs.pl --help
+
+=head1 OPTIONS
+
+=over 8
+
+=item B<--f1> <folder>
+
+Input busco folder1
+
+=item B<--f2> <folder>
+
+Input busco folder2
+
+=item B<-o>, B<--out> or B<--output> <folder>
+
+Output folder to create.
+
+=item B<--help> or B<-h>
+
+Display this helpful text.
+
+=back
+
+=head1 SHARED OPTIONS
+
+Shared options are defined in the AGAT configuration file and can be overridden via the command line for this script only.
+Common shared options are listed below; for the full list, please refer to the AGAT agat_config.yaml.
+
+=over 8
+
+=item B<--config> <file>
+
+Path to a custom AGAT configuration file.  
+By default, AGAT uses `agat_config.yaml` from the working directory if present, otherwise the default file shipped with AGAT
+(available locally via `agat config --expose`).
+
+=item B<--cpu>, B<--core>, B<--job> or B<--thread> <int>
+
+Number of parallel processes to use for file input parsing (via forking).
+
+=item B<-v> or B<--verbose> <int>
+
+Verbosity, choice are 0,1,2,3,4. 0 is quiet, 1 is normal, 2,3,4 is more verbose. Default 1.
+
+=back
+
+=head1 FEEDBACK
+
+For questions, suggestions, or general discussions about AGAT, please use the AGAT community forum:
+https://github.com/NBISweden/AGAT/discussions
+
+=head1 BUG REPORTING
+
+Bug reports should be submitted through the AGAT GitHub issue tracker:
+https://github.com/NBISweden/AGAT/issues
+
+=cut
+
+AUTHOR - Jacques Dainat

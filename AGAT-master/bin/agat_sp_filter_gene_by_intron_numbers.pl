@@ -1,0 +1,304 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+use Getopt::Long;
+use File::Basename;
+use Pod::Usage;
+use IO::File;
+use AGAT::AGAT;
+
+start_script();
+my $header = get_agat_header();
+# -----------------------------------------------------------------------------------------------
+my $opt_test="=";
+my $opt_output= undef;
+my $opt_nb = 0;
+my $opt_gff = undef;
+my $opt_help;
+
+# ---------------------------- OPTIONS ----------------------------
+# Partition @ARGV into shared vs script options
+my ($shared_argv, $script_argv) = split_argv_shared_vs_script(\@ARGV);
+
+# Parse script-specific options
+my $script_parser = Getopt::Long::Parser->new;
+$script_parser->configure('bundling','no_auto_abbrev');
+if ( ! $script_parser->getoptionsfromarray(
+  $script_argv,
+  'f|ref|reffile|gff=s' => \$opt_gff,
+  't|test=s'            => \$opt_test,
+  'nb|number|n=i'       => \$opt_nb,
+  'o|out|output=s'      => \$opt_output,
+  'h|help!'             => \$opt_help ) )
+{
+    pod2usage( { -message => 'Failed to parse command line',
+                 -verbose => 1,
+                 -exitval => 1 } );
+}
+
+if ($opt_help) {
+    pod2usage( { -verbose => 99,
+                 -exitval => 0,
+                 -message => "$header\n" } );
+}
+
+if ( ! $opt_gff ){
+    pod2usage( {
+           -message => "$header\nAt least 1 parameter is mandatory:\n1) Input reference gff file: --gff\n\n",
+           -verbose => 0,
+           -exitval => 2 } );
+}
+
+# Parse shared options and initialize AGAT
+my ($shared_opts) = parse_shared_options($shared_argv);
+initialize_agat({ config_file_in => ( $shared_opts->{config} ), input => $opt_gff, shared_opts => $shared_opts });
+
+# -------------------- END OPTIONS --------------------
+
+###############
+# Manage Output
+
+## FOR GFF FILE
+my $gffout_ok_file ;
+my $gffout_notok_file ;
+my $ostreamReport_file ;
+
+if ($opt_output) {
+  my ($outfile,$path,$ext) = fileparse($opt_output,qr/\.[^.]*/);
+
+  # set file names
+  $gffout_ok_file = $path.$outfile.$ext;
+  $gffout_notok_file = $path.$outfile."_remaining".$ext;
+  $ostreamReport_file = $path.$outfile."_report.txt";
+}
+
+my $gffout_ok = prepare_gffout( $gffout_ok_file );
+my $gffout_notok = prepare_gffout( $gffout_notok_file );
+my $ostreamReport = prepare_fileout( $ostreamReport_file );
+
+#Manage test option
+if($opt_test ne "<" and $opt_test ne ">" and $opt_test ne "<=" and $opt_test ne ">=" and $opt_test ne "="){
+  print "The test to apply is Wrong: $opt_test.\nWe want something among this list: <,>,<=,>= or =.";exit;
+}
+
+# start with some interesting information
+my $stringPrint = "We will select genes that contain $opt_test $opt_nb introns.\n";
+print $ostreamReport $stringPrint if ($opt_output);
+dual_print1 $stringPrint;
+
+                          #######################
+# >>>>>>>>>>>>>>>>>>>>>>>>#        MAIN         #<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+                          #######################
+
+######################
+### Parse GFF input #
+my ($hash_omniscient) =  slurp_gff3_file_JD({ input => $opt_gff });
+### END Parse GFF input #
+#########################
+# sort by seq id
+my $hash_sortBySeq = gather_and_sort_l1_by_seq_id($hash_omniscient);
+
+my @listok;
+my @list2;
+#################
+# == LEVEL 1 == #
+#################
+foreach my $seqid (sort { (($a =~ /(\d+)$/)[0] || 0) <=> (($b =~ /(\d+)$/)[0] || 0) } keys %{$hash_sortBySeq}){ # loop over all the feature level1
+
+	foreach my $tag_l1 (sort {$a cmp $b} keys %{$hash_omniscient->{'level1'}}){
+		foreach my $feature_l1 ( @{$hash_sortBySeq->{$seqid}{$tag_l1}} ){
+			my $id_l1 = lc($feature_l1->_tag_value('ID'));
+      my $success=undef;
+
+	    #################
+	    # == LEVEL 2 == #
+	    #################
+	    foreach my $tag_l2 (sort keys %{$hash_omniscient->{'level2'}}){ # primary_tag_key_level2 = mrna or mirna or ncrna or trna etc...
+
+	      if ( exists_keys( $hash_omniscient, ('level2', $tag_l2, $id_l1) ) ){
+	        my @list_fl2 = @{$hash_omniscient->{'level2'}{$tag_l2}{$id_l1}};
+	        foreach my $feature_l2 ( @list_fl2 ) {
+
+	          #################
+	          # == LEVEL 3 == #
+	          #################
+	          my $id_l2 = lc($feature_l2->_tag_value('ID'));
+
+	          if ( exists_keys( $hash_omniscient, ('level3', 'exon', $id_l2) ) ){
+	            my $nb_exon = @{$hash_omniscient->{'level3'}{'exon'}{$id_l2}};
+              my $nb_intron = $nb_exon-1;
+
+              if( test_size( $nb_intron, $opt_test, $opt_nb ) ){
+                push @listok, $id_l1;
+                $success = 1;
+                last;
+              }
+	          }
+	        }
+          if( $success ) {
+            last ;
+          }
+          else{
+            push @list2, $id_l1;
+          }
+	      }
+	    }
+    }
+  }
+}
+
+# print ok
+my $hash_ok = subsample_omniscient_from_level1_id_list_delete($hash_omniscient, \@listok);
+print_omniscient( {omniscient => $hash_ok, output => $gffout_ok} );
+%{$hash_ok} = ();
+# print remaining if an output is provided
+if($opt_output){
+  my $hash_remaining = subsample_omniscient_from_level1_id_list_delete($hash_omniscient, \@list2);
+  print_omniscient( {omniscient => $hash_remaining, output => $gffout_notok} );
+  %{$hash_remaining} = ();
+}
+
+my $test_success = scalar @listok;
+my $test_fail = scalar @list2;
+
+my $stringPrint2 = "$test_success genes selected with at least one RNA with $opt_test $opt_nb intron(s).\n";
+$stringPrint2 .= "$test_fail remaining genes that not pass the test.\n";
+print $ostreamReport $stringPrint2 if ($opt_output);
+dual_print1 $stringPrint2;
+
+# --- final messages ---
+end_script();
+
+
+#######################################################################################################################
+        ####################
+         #     methods    #
+          ################
+           ##############
+            ############
+             ##########
+              ########
+               ######
+                ####
+                 ##
+
+sub test_size{
+  my ($size, $operator, $nb_ref) = @_;
+
+  if ($operator eq ">"){
+    if ($size > $nb_ref){
+      return "true";
+    }
+  }
+  if ($operator eq "<"){
+    if ($size < $nb_ref){
+      return "true";
+    }
+  }
+  if ($operator eq "=" or $operator eq "=="){
+    if ($size == $nb_ref){
+      return "true";
+    }
+  }
+  if ($operator eq "<="){
+    if ($size <= $nb_ref){
+      return "true";
+    }
+  }
+  if ($operator eq ">="){
+    if ($size >= $nb_ref){
+      return "true";
+    }
+  }
+  return undef;
+}
+
+__END__
+
+=head1 NAME
+
+agat_sp_filter_gene_by_intron_numbers.pl
+
+=head1 DESCRIPTION
+
+The script aims to filter genes by intron numbers.
+It will create two files. one with the genes passing the intron number filter,
+the other one with the remaining genes.
+
+Some examples:
+Select intronless genes:
+agat_sp_filter_gene_by_intron_numbers.pl --gff infile.gff -o result.gff
+Select genes with more or equal 10 introns:
+agat_sp_filter_gene_by_intron_numbers.pl --gff infile.gff --test ">=" --nb 10 [ --output outfile ]
+
+=head1 SYNOPSIS
+
+    agat_sp_filter_gene_by_intron_numbers.pl --gff infile.gff --test ">=" --nb 10 [ --output outfile ]
+    agat_sp_filter_gene_by_intron_numbers.pl --help
+
+=head1 OPTIONS
+
+=over 8
+
+=item B<-f>, B<--reffile>, B<--gff>  or B<-ref> <file>
+
+Input GFF3 file that will be read
+
+=item B<-n>,  B<--nb> or B<--number> <int>
+
+Number of introns [Default 0]
+
+=item B<-t> or B<--test> <operator>
+
+Test to apply (>, <, =, >= or <=). If you use one of these two characters >, <,
+please do not forget to quote your parameter like that "<=". Else your terminal will complain.
+[Default "="]
+
+=item B<-o>, B<--out> or B<--output> <file>
+
+Output file to create (default GFF3 - see config to modify output format).
+If no output file is specified, the output will be written to STDOUT.
+
+=item B<-h> or B<--help>
+
+Display this helpful text.
+
+=back
+
+=head1 SHARED OPTIONS
+
+Shared options are defined in the AGAT configuration file and can be overridden via the command line for this script only.
+Common shared options are listed below; for the full list, please refer to the AGAT agat_config.yaml.
+
+=over 8
+
+=item B<--config> <file>
+
+Path to a custom AGAT configuration file.  
+By default, AGAT uses `agat_config.yaml` from the working directory if present, otherwise the default file shipped with AGAT
+(available locally via `agat config --expose`).
+
+=item B<--cpu>, B<--core>, B<--job> or B<--thread> <int>
+
+Number of parallel processes to use for file input parsing (via forking).
+
+=item B<-v> or B<--verbose> <int>
+
+Verbosity, choice are 0,1,2,3,4. 0 is quiet, 1 is normal, 2,3,4 is more verbose. Default 1.
+
+=back
+
+=head1 FEEDBACK
+
+For questions, suggestions, or general discussions about AGAT, please use the AGAT community forum:
+https://github.com/NBISweden/AGAT/discussions
+
+=head1 BUG REPORTING
+
+Bug reports should be submitted through the AGAT GitHub issue tracker:
+https://github.com/NBISweden/AGAT/issues
+
+=cut
+
+AUTHOR - Jacques Dainat

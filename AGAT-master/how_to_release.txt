@@ -1,0 +1,42 @@
+# version
+Update version in lib/AGAT/Omniscient.pm
+
+# test / check
+
+## test one test file:
+perl -I $PWD/lib t/gff_other/gff_other_issue329.t
+
+## test one batch of test
+make test_gff_other
+
+## test with debug
+  - make test TEST_FILES=t/scripts_output.t TEST_VERBOSE=1 # check one test file at a time for debugging
+
+## test with parallelisation
+HARNESS_OPTIONS=j4 make test # for all
+HARNESS_OPTIONS="j4" make test_gff_other # for test_gff_other tests only
+prove -j4 -I "$PWD/lib" t/gff_syntax/*.t # another way
+
+# create the distribution (optional)
+- make manifest
+- make dist
+=> test local installation with the dist
+=> if everything is fine the dist can be provided as an asset with the github release
+
+# PR and merge in master branch
+
+# create a release
+
+
+# Docs
+
+To keep the doc sync with the tools we need to generate md file from pod file.
+Here some explanation how to do so.
+
+# extract pod
+for i in AGAT/bin/*;do name=$(basename $i .pl); perl -MPod::Markdown::Github -e "Pod::Markdown::Github->filter('$i')" > $name.md.full ;done
+# remove FEEDBACK info and below
+for i in agat_*.full; do name=$(basename $i .full); awk '{if($0 ~ "FEEDBACK" ) exit; print $0}' $i > $name; done
+# remove the full pod file now it is useless
+rm *.full
+# Do not forget to put the md file into docs/tools and update the index.rst accordingly

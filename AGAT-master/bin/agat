@@ -1,0 +1,288 @@
+#!/usr/bin/env perl
+use v5.24;
+use warnings;
+use experimental 'signatures';
+no warnings 'experimental::signatures';
+use File::Basename;
+
+use AGAT::AppEaser qw< run d >;
+use AGAT::AGAT;
+
+# set env variable to save location of this script
+my $agat_bin;
+if( -l __FILE__){
+	$agat_bin = dirname(readlink(__FILE__));
+} else{
+	$agat_bin = dirname(__FILE__);
+}
+$ENV{'AGAT_BIN'}=$agat_bin;
+
+my $APPNAME = 'agat';
+my $header = get_agat_header();
+my $application = {
+   factory       => {prefixes => {'#' => 'AGAT::AGAT#'}},
+   configuration => {
+
+      # the name of the application, set it above in $APPNAME
+      name               => $APPNAME,
+
+      # figure out names of environment variables automatically
+      #	'auto-environment' => 1,
+
+      # sub-commands without children are leaves (no sub help/commands)
+      'auto-leaves'    => 0,
+
+      # help goes to standard error by default, override to stdout
+      # 'help-on-stderr' => 0,
+
+      # Where to get the specifications for commands
+      # specfetch => '+SpecFromHash',         # default
+      # specfetch => '+SpecFromHashOrModule', # possible alternative
+   },
+   commands => {
+      MAIN => {
+         help        => $header,
+         description =>
+'AGAT checks, fixes, pads missing information (features/attributes) of any
+kind of GTF/GFF (GXF) files and create complete, sorted and standardised 
+GFF/GTF formated files. Over the years it has been enriched by many many
+tools to perform just about any tasks that is possible related to GTF/GFF
+format files (sanitizing, conversions, merging, modifying, filtering, FASTA
+sequence extraction, adding information, etc). Comparing to other methods
+AGAT is robust to even the most despicable GTF/GFF files.
+
+By default AGAT automatically selects the appropriate parser and generates
+a GFF3 output by default. This can be tuned via the config file.
+
+Configuration (optional)
+========================
+To access the agat_config.yaml configuration file: agat config --expose
+The file will appear in the working folder. By default, AGAT uses the config file from the working directory when any.
+
+Feature levels (optional)
+========================
+To access the AGAT feature_levels file: agat levels --expose
+The file will appear in the working folder. By default, AGAT uses the config file from the working directory when any.
+',
+				 children => [qw< levels config >],
+
+         # allow for configuration files
+         sources            => '+SourcesWithFiles',
+         # 'config-files' => ["/etc/$APPNAME.json"],
+         options     => [
+						{
+							getopt      => 'h|help!',
+							shortbool   => 1, #shortbool added by JDainat to avoid --no-help
+							help        => 'Display the help',
+						},
+						{
+							 getopt      => 'version|v!',
+							 shortbool   => 1,
+							 help        => 'Display the AGAT version',
+						},
+						{
+							 getopt      => 'tools|t!',
+							 shortbool   => 1,
+							 help        => 'Display the AGAT tools available',
+						},
+						{
+							 getopt      => 'info|i!',
+							 shortbool   => 1,
+							 help        => 'Display information on how AGAT works',
+						},
+         ],
+				 commit	     => '#handle_main',
+      },
+
+# ================================== LEVELS ====================================
+      levels => {
+         help        => 'Handle feature types and relationships',
+         description =>
+'If you want to see, add or modified the feature relationships you will have to
+use this option. It will copy past in you working directory the feature_levels.yaml file 
+used to define the relationships between feature types and their level organisation.
+Typical level organisation: Level1 => gene; Level2 => mRNA; level3 => exon,cds,
+utrs. If you get warning from the AGAT parser that a feature relationship
+is not defined, you can provide information about it within the exposed feature_levels.yaml
+file. Indeed, if the feature_levels.yaml file exists in your working directory, it will be
+used by default.',
+         options     => [
+					 {
+							 getopt      => 'h|help!',
+							 shortbool   => 1,
+							 help        => 'Display the help',
+						},
+            {
+               getopt      => 'expose|e!',
+               shortbool   => 1,
+               help        => 'Expose the feature_levels.yaml file.',
+            },
+         ],
+         commit => '#handle_levels',
+      },
+# ================================== CONFIG ====================================
+			config => {
+				 help        => 'Handle agat configuration used by _sp_ scripts',
+				 description =>
+'The _sp_ scripts use the AGAT parser that can be tuned in many way. The
+default parameters are stored within a YAML file. You can see this configuration
+file using the expose command that will copy it in you working directory. You
+are then free to modify it at your convenience. Wen a config YAML file is
+available within the working directory, AGAT will use it in priority. (For
+convenience and automation, the parameters can be modified on the fly when using
+the expose command. In such case you will get a modified copy of the config file.)
+The _sq_ scripts can be tuned only by few options of the config file:
+force_gff_input_version, gtf_output_version, gff_output_version and output_format.
+',
+				 options     => [
+					 {
+							getopt      => 'help|h!',
+							help        => 'Display the help',
+							shortbool   => 1,
+					 },
+					 {
+							getopt      => 'expose|e!',
+							help        => 'Expose the config file. By default agat_config.yaml, but you can change the config file name using output option.',
+							shortbool   => 1,
+					 },
+					{
+							getopt      => 'output=s',
+							help        => 'To create a config file with the desired name instead of the default agat_config.yaml. Do not forget to mention your config file name when using AGAT, otherwise AGAT will use the agat_config.yaml in your working directory if any or the original agat_config.yaml file shiped along the tool.',
+					 },
+					 {
+							getopt      => 'cpu|thread|core|job=i',
+							help        => 'Integer - Number of parallel processes to use for file input parsing (via forking).',
+					 },
+					 {
+							getopt      => 'minimum_chunk_size=i',
+							help        => 'Integer - Number of parallel processes to use for file input parsing (via forking).',
+					 },
+					{
+						getopt      => 'verbose|v=i',
+						help        => 'Verbosity during the GFF/GTF parsing. 0 is quiet. 1,2,3 or 4 to increase verbosity.[Default 1]',
+					},
+					 {
+							getopt      => 'progress_bar!',
+							help        => 'To activate / deactivate the progress bar. [Default activated]',
+					 },
+					 {
+
+							getopt      => 'url_encode_out!',
+							help        => 'To activate / deactivate the URL escaping of attributes (9th column) in GFF output. [Default activated]',
+					 },
+					 {
+							getopt      => 'log!',
+							help        => 'To create a log file while parsing the input file to keep track of modification made by AGAT. [Default activated]',
+					 },
+					 {
+							getopt      => 'debug!',
+							help        => 'Extra verbosity for debugging. [Default deactivated]',
+					 },
+					 {
+							getopt      => 'tabix!',
+							help        => 'To sort the output in tabix format. [Default deactivated]',
+					 },
+					 {
+							getopt      => 'merge_loci!',
+							help        => 'To merge loci that overlap at CDS level in a single locus. [Default deactivated]',
+					 },
+					 {
+							getopt      => 'throw_fasta!',
+							help        => 'To throw the fasta embedded in the input file. [Default deactivated]',
+					 },
+					 {
+							getopt      => 'force_gff_input_version=f',
+							help        => 'To force AGAT to use a specific version of the bioperl parser. Choice: 0, 1, 2, 2.5 or 3. 0 means let AGAT choose automatically. [Default 0]',
+					 },
+					 {
+							getopt      => 'output_format=s',
+							help        => 'Set the output format. Choice GFF or GTF. [Default GFF]',
+					 },
+					 {
+							getopt      => 'gff_output_version=f',
+							help        => 'Set the GFF output version. Choice 1, 2, 2.5, 3. [Default 3]',
+					 },
+					 {
+							getopt      => 'gtf_output_version=s',
+							help        => 'Set the GTF output vesion. Choice 1, 2, 2.1, 2.2, 2.5, 3 or relax. [Default relax]',
+					 },
+					{
+							getopt      => 'deflate_attribute!',
+							help        => 'deflate multi-values attributes:  attribute_tag=att_value1,att_value2,att_value3 will will become attribute_tag=att_value1;attribute_tag2=att_value2;attribute_tag3=att_value3;',
+					 },
+					 {						getopt      => 'force!',
+						help        => 'Force overwrite existing output file. [Default false]',
+					 },
+					 {							getopt      => 'create_l3_for_l2_orphan!',
+							help        => 'To create l3 feature for l2 feature without any. [Default activated]',
+					 },
+					 {
+							getopt      => 'locus_tag=s',
+							help        => 'Coma separated list of attribute tag to use to define locus. Will be used if no Parent/id GFF relationship exist or gene_id/transcript_id GTF tag. [Default locus_tag, gene_id ]',
+					 },
+					 {
+							getopt      => 'prefix_new_id=s',
+							help        => 'Prefix to be used for ID of newly created feature. [Default nbis]',
+					 },
+					 {
+							getopt      => 'check_sequential!',
+							help        => 'Expert only - To take care of feature without any proper relationship.[Default activated]',
+					 },
+					 {
+							getopt      => 'check_l2_linked_to_l3!',
+							help        => 'Expert only - To check that all l3 feature has a parental l2 feature. And create one if any missing. [Default activated]',
+					 },
+					 {
+							getopt      => 'check_l1_linked_to_l2!',
+							help        => 'Expert only - To check that all l2 feature has a prental l1 feature. And create one if any missing. [Default activated]',
+					 },
+					 {
+							getopt      => 'remove_orphan_l1!',
+							help        => 'Expert only - To remove level1 feature whithout children features (except top and standalone features that do not have children by definition). [Default activated]',
+					 },
+					 {
+							getopt      => 'check_all_level3_locations!',
+							help        => 'To check location of level3 features: merge overlapping and adjacent exons and adjacent CDS. [Default activated]',
+					 },
+					 {
+							getopt      => 'check_cds!',
+							help        => 'To check when stop codons are definied that they are part of the CDS. If not AGAT extends the CDS to include it. [Default activated]',
+					 },
+					 {
+							getopt      => 'check_exons!',
+							help        => 'To check that exons include all other l3 feature types that are included within exon (see feature_levels.yaml file e.g: cds:"exon"). [Default activated]',
+					 },
+					 {
+							getopt      => 'check_utrs!',
+							help        => 'To create UTRs if missing based on CDS and exon features. [Default activated]',
+					 },
+					 {
+							getopt      => 'check_all_level2_locations!',
+							help        => 'To check that l2 feature locations do not span belong their exon locations. [Default activated]',
+					 },
+					 {
+							getopt      => 'check_all_level1_locations!',
+							help        => 'To check that l1 feature locations do not span belong their l2 locations. [Default activated]',
+					 },
+					 {
+							getopt      => 'check_identical_isoforms!',
+							help        => 'To remove identical isoforms (same exon,cds,locations). [Default activated]',
+					 },
+					 {
+							getopt      => 'clean_attributes_from_template!',
+							help        => 'To clean the attributes of features used as template by AGAT when creating new features. [Default deactivated]',
+					 },
+				 ],
+				 commit => '#handle_config',
+			},
+   }
+};
+run($application, [@ARGV]);
+exit;
+
+
+# implementation of sub-command bar
+sub cat ($general, $config, $args) {
+    say defined($config->{galook}) ? $config->{galook} : '*undef*';
+    return;
+}

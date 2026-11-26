@@ -1,4 +1,0 @@
-sphinx-rtd-theme
-recommonmark
-sphinxemoji
-sphinx-markdown-tables

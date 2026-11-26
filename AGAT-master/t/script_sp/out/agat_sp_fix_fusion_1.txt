@@ -1,3 +1,0 @@
-Results:
-16 genes affected and 16 mRNA.
-Job done in 1 seconds

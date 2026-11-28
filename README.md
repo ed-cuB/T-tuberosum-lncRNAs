@@ -1,4 +1,4 @@
-# Log of the pipeline I used to filter lncRNAs from the Tropaeolum tuberosum transcriptome
+# Log of the pipeline I used to filter lncRNAs from the *Tropaeolum tuberosum* transcriptome
 
 ## Dependencies, in order of usage:
 
@@ -237,7 +237,7 @@ table(df$Pred)
 
 This extracted noncoding IDs from the specific format of each tool's output. therer's a gene-only count, just got curious.
 
-```sh
+```bash
 #!/bin/bash
 
 INDIR="/path/to/cod_pot_tools"
